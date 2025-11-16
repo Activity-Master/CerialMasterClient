@@ -22,7 +22,6 @@
         <dependency>
             <groupId>com.jwebmp.plugins</groupId>
             <artifactId>typescript-client</artifactId>
-            <version>${jwebmp.version}</version>
         </dependency>
 
         <dependency>

@@ -906,6 +906,7 @@ public class MultiTimedComPortSender
         if (mp.state != TimedComPortSender.State.Completed)
         {
           String fname = null;
+          String title = null;
           try
           {
             // derive friendly name from latest progress/title if possible, else from planned spec
@@ -913,6 +914,8 @@ public class MultiTimedComPortSender
             {
               //if (mp.title != null && !mp.title.isBlank()) {
               fname = mp.title;
+              //title maps to message title, prefer mp.title here if enabled
+              title = mp.title;
             }
             else
             {
@@ -929,6 +932,17 @@ public class MultiTimedComPortSender
                   {
                     if (s != null && java.util.Objects.equals(s.getId(), id))
                     {
+                      // Resolve title distinctly from friendly name
+                      if (s.getTitle() != null && !s.getTitle().isBlank())
+                      {
+                        title = s.getTitle();
+                      }
+                      else
+                      {
+                        title = s.getId();
+                      }
+
+                      // Resolve friendlyName as before, independent of title field
                       String fn = s.getFriendlyName();
                       if (fn != null && !fn.isBlank())
                       {
@@ -952,7 +966,12 @@ public class MultiTimedComPortSender
           catch (Throwable ignored)
           {
           }
-          failures.add(new Failure(port, id, fname, mp.state));
+          // Ensure we always have a title value mapped for Failure
+          if (title == null || title.isBlank())
+          {
+            title = (id == null || id.isBlank()) ? "" : id;
+          }
+          failures.add(new Failure(port, id, title, fname, mp.state));
         }
       }
       if (id != null)
