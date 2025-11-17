@@ -514,10 +514,45 @@ public class MultiTimedComPortSender
   // ====== Enqueue APIs ======
 
   /**
+   * Preemptively cancels any sender that is still processing a message/group.
+   * This prevents overlap when a new task group is enqueued while a previous one is still running.
+   */
+  private void preemptAllActiveSenders(String reason)
+  {
+    try
+    {
+      if (senders != null && !senders.isEmpty())
+      {
+        for (TimedComPortSender s : senders.values())
+        {
+          try
+          {
+            if (s != null && s.hasActiveGroupOrMessage())
+            {
+              s.cancel(reason, true);
+            }
+          }
+          catch (Throwable ignored)
+          {
+          }
+        }
+      }
+    }
+    catch (Throwable ignored)
+    {
+    }
+    // Give a brief moment for cancellations to propagate and timers to stop
+    try { Thread.sleep(20L); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+  }
+
+  /**
    * Enqueue a list of messages for one COM port as a FIFO group.
    */
   public Uni<GroupResult> enqueueGroup(Integer comPort, List<MessageSpec> specs, Config baseConfig)
   {
+    // NOTE: Do not globally preempt other ports here. That causes only the last enqueued group to run
+    // when multiple groups are enqueued in quick succession. We only cancel the same-port sender below
+    // if it is currently active, allowing other ports (or prior groups) to complete naturally.
     TimedComPortSender sender = getOrCreateSender(comPort, baseConfig);
     int count = (specs == null ? 0 : specs.size());
     log.trace("🚀 Enqueueing group on COM{} with {} messages{}", comPort, count, pausedAll.get() ? " (manager paused)" : "");
@@ -609,6 +644,17 @@ public class MultiTimedComPortSender
                                                       Config baseConfig,
                                                       Map<String, Boolean> properties)
   {
+    // Optionally preempt existing active senders if explicitly requested by caller via property flag.
+    boolean preemptExisting = false;
+    try {
+      if (properties != null) {
+        Boolean b = properties.get("preemptExisting");
+        preemptExisting = Boolean.TRUE.equals(b);
+      }
+    } catch (Throwable ignored) {}
+    if (preemptExisting) {
+      try { preemptAllActiveSenders("New multi-port group enqueued – preempting active senders"); } catch (Throwable ignored) {}
+    }
     if (byPort == null || byPort.isEmpty())
     {
       log.warn("⚠️ enqueueGroups called with empty port map");
@@ -1025,6 +1071,8 @@ public class MultiTimedComPortSender
     synchronized (aggLock)
     {
       runActive = false;
+      // Ensure completion listeners do not leak into subsequent runs
+      try { resetGroupCompletionHandlers(); } catch (Throwable ignored) {}
     }
     // After finishing, dispose of success-related per-id references; keep failures for retry
     try
@@ -1316,7 +1364,7 @@ public class MultiTimedComPortSender
   {
     return onGroupCompleted(consumer, t -> {
       try { log.error("Error in onGroupCompleted subscriber: {}", t.toString(), t); } catch (Throwable ignored) {}
-    });
+    }, true);
   }
 
   /**
@@ -1326,30 +1374,81 @@ public class MultiTimedComPortSender
   public java.lang.AutoCloseable onGroupCompleted(java.util.function.Consumer<AggregateProgress> consumer,
                                                   java.util.function.Consumer<java.lang.Throwable> onError)
   {
+    return onGroupCompleted(consumer, onError, true);
+  }
+
+  /**
+   * Register a consumer to be notified when the current group completes, with control over accumulation vs replacement.
+   *
+   * @param consumer   The listener to receive the final AggregateProgress snapshot.
+   * @param accumulate If true, keep existing listeners and add this one; if false, replace existing listeners.
+   */
+  public java.lang.AutoCloseable onGroupCompleted(java.util.function.Consumer<AggregateProgress> consumer,
+                                                  boolean accumulate)
+  {
+    return onGroupCompleted(consumer, null, accumulate);
+  }
+
+  /**
+   * Register a consumer to be notified when the currently enqueued task group completes.
+   * Allows specifying whether this registration should accumulate with existing listeners or replace them.
+   *
+   * @param consumer  The listener to receive the final AggregateProgress snapshot.
+   * @param onError   Optional error handler for subscription failures (may be null).
+   * @param accumulate If true, keep existing listeners and add this one; if false, cancel and remove existing listeners first.
+   * @return An AutoCloseable handle to cancel this specific subscription.
+   */
+  public java.lang.AutoCloseable onGroupCompleted(java.util.function.Consumer<AggregateProgress> consumer,
+                                                  java.util.function.Consumer<java.lang.Throwable> onError,
+                                                  boolean accumulate)
+  {
     if (consumer == null)
     {
       return () -> {};
     }
-    io.smallrye.mutiny.subscription.Cancellable cancellable = null;
-    try
+    // Perform reset + subscribe atomically with respect to run lifecycle to avoid races
+    io.smallrye.mutiny.subscription.Cancellable[] holder = new io.smallrye.mutiny.subscription.Cancellable[1];
+    synchronized (aggLock)
     {
-      cancellable = currentRunAggregateUni()
-          .emitOn(io.smallrye.mutiny.infrastructure.Infrastructure.getDefaultExecutor())
-          .subscribe()
-          .with(consumer, t -> {
-            try { if (onError != null) { onError.accept(t); } } catch (Throwable ignored) {}
-          });
-      if (cancellable != null) {
-        groupCompletionSubscribers.add(cancellable);
+      // If not accumulating, clear any existing listeners first
+      if (!accumulate)
+      {
+        resetGroupCompletionHandlers();
+      }
+      // Snapshot the current aggregate future via Uni while under lock
+      io.smallrye.mutiny.Uni<AggregateProgress> uni;
+      try
+      {
+        uni = currentRunAggregateUni();
+      }
+      catch (Throwable t)
+      {
+        // No active run; return a no-op handle
+        return () -> {};
+      }
+      try
+      {
+        holder[0] = uni
+            .emitOn(io.smallrye.mutiny.infrastructure.Infrastructure.getDefaultExecutor())
+            .subscribe()
+            .with(consumer, t -> {
+              try { if (onError != null) { onError.accept(t); } } catch (Throwable ignored) {}
+            });
+        if (holder[0] != null)
+        {
+          groupCompletionSubscribers.add(holder[0]);
+        }
+      }
+      catch (Throwable t)
+      {
+        try { if (onError != null) { onError.accept(t); } } catch (Throwable ignored) {}
       }
     }
-    catch (Throwable t)
-    {
-      try { if (onError != null) { onError.accept(t); } } catch (Throwable ignored) {}
-    }
-    io.smallrye.mutiny.subscription.Cancellable finalCancellable = cancellable;
     return () -> {
-      try { if (finalCancellable != null) { finalCancellable.cancel(); groupCompletionSubscribers.remove(finalCancellable); } } catch (Throwable ignored) {}
+      try {
+        io.smallrye.mutiny.subscription.Cancellable c = holder[0];
+        if (c != null) { c.cancel(); groupCompletionSubscribers.remove(c); }
+      } catch (Throwable ignored) {}
     };
   }
 

@@ -103,6 +103,12 @@ public class TimedComPortSender
   // When true, suppress emitting status/progress and scheduling snapshot publishes (used for silent cancellations)
   private final java.util.concurrent.atomic.AtomicBoolean suppressTelemetry = new java.util.concurrent.atomic.AtomicBoolean(false);
 
+  // Guards to ensure a message cannot process more than one reply/terminalization
+  // Tracks message ids currently handling a reply (e.g., complete()/error()) to avoid duplicate processing while in-flight
+  private final java.util.Set<String> handlingReplyIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+  // Tracks message ids that have already been terminalized to avoid processing a duplicate terminal event for the same message
+  private final java.util.Set<String> terminalizedIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
   private final Object lock = new Object();
   private volatile ScheduledFuture<?> currentSchedule;
 
@@ -428,6 +434,13 @@ public class TimedComPortSender
 
   public void complete()
   {
+    // Prevent processing multiple replies for the same message id
+    String id = activeMessageId();
+    if (id != null && !handlingReplyIds.add(id))
+    {
+      // Already handling/handled a reply for this message id; ignore duplicates
+      return;
+    }
     Config cfg = this.activeConfig != null ? this.activeConfig : this.defaultConfig;
     boolean alwaysWait = (cfg != null && cfg.alwaysWaitFullTimeoutAfterSend);
 
@@ -459,6 +472,7 @@ public class TimedComPortSender
         emit(new com.guicedee.activitymaster.cerialmaster.client.StatusUpdate(attempts.get(), State.Running, "Externally completed; waiting for timeout"));
         emitMessageProgress(new com.guicedee.activitymaster.cerialmaster.client.MessageProgress(activeMessageId(), activeMessageTitle(), activeMessagePayload(), attempts.get(), State.Running, activeConfig, defaultConfig, "Externally completed; waiting for timeout"));
       }
+      // Keep handling flag until terminalization callback occurs
       return;
     }
 
@@ -481,6 +495,14 @@ public class TimedComPortSender
       emit(new com.guicedee.activitymaster.cerialmaster.client.StatusUpdate(attempts.get(), State.Completed, "Externally completed"));
       emitMessageProgress(new com.guicedee.activitymaster.cerialmaster.client.MessageProgress(activeMessageId(), activeMessageTitle(), activeMessagePayload(), attempts.get(), State.Completed, activeConfig, defaultConfig, "Externally completed"));
       notifyTerminal(buildCurrentMessageResult(State.Completed));
+    }
+    else
+    {
+      // No state change; release the handling flag
+      if (id != null)
+      {
+        handlingReplyIds.remove(id);
+      }
     }
   }
 
@@ -533,6 +555,8 @@ public class TimedComPortSender
             activeGroup = null;
           }
           // Clear any active message context
+          // Release reply-handling guard for the active message id (if any)
+          try { String id = activeMessageId(); if (id != null) { handlingReplyIds.remove(id); } } catch (Throwable ignored) {}
           activeMessage = null;
           currentMessageFuture = null;
           terminalListener = null;
@@ -554,6 +578,12 @@ public class TimedComPortSender
    */
   public void error(String reason)
   {
+    // Prevent processing multiple replies/errors for the same message id
+    String id = activeMessageId();
+    if (id != null && !handlingReplyIds.add(id))
+    {
+      return;
+    }
     if (completed.compareAndSet(false, true))
     {
       cancelCurrentSchedule();
@@ -562,6 +592,14 @@ public class TimedComPortSender
       emitMessageProgress(new com.guicedee.activitymaster.cerialmaster.client.MessageProgress(activeMessageId(), activeMessageTitle(), activeMessagePayload(), attempts.get(), State.Error, activeConfig, defaultConfig, msg));
       notifyTerminal(buildCurrentMessageResult(State.Error));
       // Keep scheduler alive for reuse across messages
+    }
+    else
+    {
+      // No state change; release the handling flag
+      if (id != null)
+      {
+        handlingReplyIds.remove(id);
+      }
     }
   }
 
@@ -642,6 +680,8 @@ public class TimedComPortSender
     this.attempts.set(0);
     this.paused.set(false);
     cancelCurrentSchedule();
+    // Reset dedupe guards for the new active message id
+    try { String id = activeMessageId(); if (id != null) { handlingReplyIds.remove(id); terminalizedIds.remove(id); } } catch (Throwable ignored) {}
     emit(new StatusUpdate(attempts.get(), State.Running, "Starting"));
     emitMessageProgress(new MessageProgress(activeMessageId(), activeMessageTitle(), activeMessagePayload(), attempts.get(), State.Running, activeConfig, defaultConfig, "Starting"));
     scheduleNext(0);
@@ -1428,6 +1468,17 @@ public class TimedComPortSender
   {
     synchronized (lock)
     {
+      // Deduplicate terminalization per message id to ensure only the first terminal event is processed
+      String rid = (result == null) ? null : result.id;
+      if (rid != null)
+      {
+        if (!terminalizedIds.add(rid))
+        {
+          // Already terminalized; ensure handling flag is cleared and ignore duplicates
+          handlingReplyIds.remove(rid);
+          return;
+        }
+      }
       // complete per-message future
       if (result != null && result.id != null)
       {
@@ -1497,6 +1548,8 @@ public class TimedComPortSender
         messageEndEpochMs.remove(result.id);
       }
       // clear current
+      // Clear handling flag now that terminalization has been processed
+      try { if (rid != null) { handlingReplyIds.remove(rid); } } catch (Throwable ignored) {}
       activeMessage = null;
       terminalListener = null;
       currentMessageFuture = null;
