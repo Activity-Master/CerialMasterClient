@@ -323,6 +323,13 @@ public class MultiTimedComPortSender
   private final java.util.Set<io.smallrye.mutiny.subscription.Cancellable> groupCompletionSubscribers =
       java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
+  // Ensure finalizeAggregate() executes only once per run
+  private final java.util.concurrent.atomic.AtomicBoolean aggregateFinalized = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+  // Track the set of planned message IDs for the current run. This prevents late/stray terminal events
+  // (e.g., timeouts from a prior run) from influencing the current aggregate's completion logic.
+  private final java.util.Set<String> plannedIds = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
   // === Consumer registration for statistics updates ===
   private final java.util.List<java.util.function.Consumer<com.guicedee.activitymaster.cerialmaster.client.ManagerSnapshot>> statsConsumers = new java.util.concurrent.CopyOnWriteArrayList<>();
   // separate debounce maps for consumer notifications
@@ -556,6 +563,16 @@ public class MultiTimedComPortSender
     TimedComPortSender sender = getOrCreateSender(comPort, baseConfig);
     int count = (specs == null ? 0 : specs.size());
     log.trace("🚀 Enqueueing group on COM{} with {} messages{}", comPort, count, pausedAll.get() ? " (manager paused)" : "");
+    // Requirement: onCompleteListeners should reset/clear with every new group enqueued.
+    // Do this for single-port flows or when no multi-port aggregate is active, without disturbing a multi-port run.
+    synchronized (aggLock)
+    {
+      boolean inMultiPortRun = (this.plannedByPort != null && this.plannedByPort.size() > 1 && this.runActive);
+      if (!inMultiPortRun)
+      {
+        try { resetGroupCompletionHandlers(); } catch (Throwable ignored) {}
+      }
+    }
     emitStatus(comPort, TimedComPortSender.State.Running, "Enqueue group of " + count);
     if (specs == null || specs.isEmpty())
     {
@@ -573,7 +590,10 @@ public class MultiTimedComPortSender
       shouldInitSinglePortPlan = (this.plannedByPort == null || this.plannedByPort.isEmpty()) && !this.runActive;
       if (shouldInitSinglePortPlan)
       {
+        // Reset finalize-once guard for the new run
+        try { aggregateFinalized.set(false); } catch (Throwable ignored) {}
         resetGroupCompletionHandlers();
+        plannedIds.clear();
         this.plannedByPort = new LinkedHashMap<>();
         this.plannedByPort.put(comPort, List.copyOf(specs));
         this.plannedBaseConfig = (baseConfig != null) ? baseConfig : new Config();
@@ -586,6 +606,16 @@ public class MultiTimedComPortSender
         this.runActive = true;
         this.runStartNanos = System.nanoTime();
         this.runStartEpochMs = System.currentTimeMillis();
+        // Populate plannedIds for the single port
+        try {
+          if (specs != null) {
+            for (MessageSpec spec : specs) {
+              if (spec != null && spec.getId() != null) {
+                plannedIds.add(spec.getId());
+              }
+            }
+          }
+        } catch (Throwable ignored) {}
         // compute initial worst-case for this single port (sum of remaining on this port)
         long portWorst = 0L;
         for (MessageSpec spec : specs)
@@ -662,6 +692,9 @@ public class MultiTimedComPortSender
       synchronized (aggLock)
       {
         resetGroupCompletionHandlers();
+        // Reset finalize-once guard for the new (empty) run
+        try { aggregateFinalized.set(false); } catch (Throwable ignored) {}
+        plannedIds.clear();
         this.plannedByPort = new LinkedHashMap<>();
         this.plannedBaseConfig = baseConfig != null ? baseConfig : new Config();
         this.plannedGroupProperties = (properties == null) ? java.util.Map.of() : new java.util.LinkedHashMap<>(properties);
@@ -687,6 +720,9 @@ public class MultiTimedComPortSender
     synchronized (aggLock)
     {
       resetGroupCompletionHandlers();
+      // Reset finalize-once guard for the new run
+      try { aggregateFinalized.set(false); } catch (Throwable ignored) {}
+      plannedIds.clear();
       this.plannedByPort = new LinkedHashMap<>();
       byPort.forEach((k, v) -> this.plannedByPort.put(k, v == null ? List.of() : List.copyOf(v)));
       this.plannedBaseConfig = baseConfig != null ? baseConfig : new Config();
@@ -699,6 +735,18 @@ public class MultiTimedComPortSender
       this.runActive = true;
       this.runStartNanos = System.nanoTime();
       this.runStartEpochMs = System.currentTimeMillis();
+      // Populate plannedIds for this multi-port run
+      try {
+        for (java.util.Map.Entry<Integer, java.util.List<MessageSpec>> e : this.plannedByPort.entrySet()) {
+          java.util.List<MessageSpec> specs = e.getValue();
+          if (specs == null) continue;
+          for (MessageSpec spec : specs) {
+            if (spec != null && spec.getId() != null) {
+              plannedIds.add(spec.getId());
+            }
+          }
+        }
+      } catch (Throwable ignored) {}
       // Proactively reset child sender status/history for all involved ports so per-port error flags reset
       try {
         for (Integer port : this.plannedByPort.keySet()) {
@@ -945,7 +993,9 @@ public class MultiTimedComPortSender
     if (mp.state == TimedComPortSender.State.Completed || mp.state == TimedComPortSender.State.TimedOut
             || mp.state == TimedComPortSender.State.Cancelled || mp.state == TimedComPortSender.State.Error)
     {
-      boolean newlyTerminal = (id != null) && terminalMessages.add(id);
+      // Only consider terminal events that belong to the current run's planned IDs.
+      boolean inPlan = (id != null) && plannedIds.contains(id);
+      boolean newlyTerminal = inPlan && terminalMessages.add(id);
       if (newlyTerminal)
       {
         messageEndNanos.put(id, System.nanoTime());
@@ -1020,7 +1070,7 @@ public class MultiTimedComPortSender
           failures.add(new Failure(port, id, title, fname, mp.state));
         }
       }
-      if (id != null)
+      if (id != null && plannedIds.contains(id))
       {
         messageIdToPort.remove(id);
       }
@@ -1036,7 +1086,7 @@ public class MultiTimedComPortSender
                                  .sum();
           if (plannedTotal > 0)
           {
-            int terminalCount = terminalMessages.size();
+            int terminalCount = terminalMessages.size(); // only contains planned IDs due to the guard above
             if (terminalCount >= plannedTotal && runActive)
             {
               finalizeAggregate();
@@ -1052,6 +1102,12 @@ public class MultiTimedComPortSender
 
   private void finalizeAggregate()
   {
+    // Ensure this method executes only once per run
+    try {
+      if (!aggregateFinalized.compareAndSet(false, true)) {
+        return;
+      }
+    } catch (Throwable ignored) {}
     log.trace("🎉 Finalizing run aggregate");
     AggregateProgress snap = computeAggregateSnapshot(true);
     // record finish time for idle detection
@@ -1071,8 +1127,6 @@ public class MultiTimedComPortSender
     synchronized (aggLock)
     {
       runActive = false;
-      // Ensure completion listeners do not leak into subsequent runs
-      try { resetGroupCompletionHandlers(); } catch (Throwable ignored) {}
     }
     // After finishing, dispose of success-related per-id references; keep failures for retry
     try
