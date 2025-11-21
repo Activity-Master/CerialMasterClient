@@ -106,7 +106,7 @@ public class ComPortConnection<J extends ComPortConnection<J>>
 		return existing;
 	}
 
-	public J setResourceItem(IResourceItem<?, ?> item)
+	public @org.jspecify.annotations.NonNull J setResourceItem(IResourceItem<?, ?> item)
 	{
 		this.resourceItem = item;
 		setId(item.getId());
@@ -173,7 +173,7 @@ public class ComPortConnection<J extends ComPortConnection<J>>
 	}
 
  @SuppressWarnings("unchecked")
- public J setComPortStatus(ComPortStatus status)
+ public @org.jspecify.annotations.NonNull J setComPortStatus(ComPortStatus status)
  {
  	ComPortStatus oldCoalesced = coalesceStatus(getComPortStatus());
  	ComPortStatus newCoalesced = coalesceStatus(status);
@@ -183,7 +183,7 @@ public class ComPortConnection<J extends ComPortConnection<J>>
  }
 
  @SuppressWarnings("unchecked")
- public J setComPortStatus(ComPortStatus status, boolean silent)
+ public @org.jspecify.annotations.NonNull J setComPortStatus(ComPortStatus status, boolean silent)
  {
  	ComPortStatus oldCoalesced = coalesceStatus(getComPortStatus());
  	ComPortStatus newCoalesced = coalesceStatus(status);
@@ -245,7 +245,7 @@ public class ComPortConnection<J extends ComPortConnection<J>>
 
 	@SuppressWarnings("unchecked")
 	@Override
-	public J setComPortStatusUpdate(java.util.function.BiConsumer<CerialPortConnection<?>, ComPortStatus> callback)
+	public @org.jspecify.annotations.NonNull J setComPortStatusUpdate(java.util.function.BiConsumer<CerialPortConnection<?>, ComPortStatus> callback)
 	{
 		return onComPortStatusUpdate(callback);
 	}

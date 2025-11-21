@@ -129,7 +129,7 @@ public class MessageSpec<J extends MessageSpec<J>> implements INgDataType<J>
     return generateMessage(0);
   }
 
-  public J setAlwaysSucceed(boolean alwaysSucceed)
+  public @org.jspecify.annotations.NonNull J setAlwaysSucceed(boolean alwaysSucceed)
   {
     this.alwaysSucceed = alwaysSucceed;
     return (J)this;
