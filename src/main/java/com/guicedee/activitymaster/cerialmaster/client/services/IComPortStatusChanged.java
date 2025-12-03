@@ -2,7 +2,7 @@ package com.guicedee.activitymaster.cerialmaster.client.services;
 
 import com.guicedee.activitymaster.cerialmaster.client.ComPortConnection;
 import com.guicedee.cerial.enumerations.ComPortStatus;
-import com.guicedee.guicedinjection.interfaces.IDefaultService;
+import com.guicedee.client.services.IDefaultService;
 
 import java.io.Serializable;
 
