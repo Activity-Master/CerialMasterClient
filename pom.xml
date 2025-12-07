@@ -9,9 +9,35 @@
     </parent>
 	
     <artifactId>cerial-master-client</artifactId>
-    <description>As in froot loops xD</description>
-    <packaging>jar</packaging>
     <name>Cerial Master Client</name>
+    <description>ActivityMaster client library for orchestrating scheduled COM port messaging, telemetry, and GuicedEE service hooks for the Cerial Master addon.</description>
+    <url>https://github.com/Activity-Master/CerialMasterClient</url>
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <organization>
+        <name>Activity Master</name>
+        <url>https://github.com/Activity-Master</url>
+    </organization>
+    <scm>
+        <url>https://github.com/Activity-Master/CerialMasterClient</url>
+        <connection>scm:git:https://github.com/Activity-Master/CerialMasterClient.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/Activity-Master/CerialMasterClient.git</developerConnection>
+        <tag>HEAD</tag>
+    </scm>
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/Activity-Master/CerialMasterClient/issues</url>
+    </issueManagement>
+    <ciManagement>
+        <system>GitHub Actions</system>
+        <url>https://github.com/Activity-Master/CerialMasterClient/actions</url>
+    </ciManagement>
+    <packaging>jar</packaging>
 
     <dependencies>
         <dependency>

@@ -553,13 +553,86 @@ public class MultiTimedComPortSender
   }
 
   /**
+   * Fully cancels all active senders and resets manager/aggregate state before starting a new run.
+   * Ensures that any pending groups/messages/waits are discarded and consumers don't see mixed statistics.
+   */
+  private void cancelAllAndReset(String reason, long settleMillis)
+  {
+    try
+    {
+      // Cancel all active senders and purge their internal queues
+      if (senders != null && !senders.isEmpty())
+      {
+        for (TimedComPortSender s : senders.values())
+        {
+          try
+          {
+            if (s != null && s.hasActiveGroupOrMessage())
+            {
+              s.cancel(reason, true);
+            }
+          }
+          catch (Throwable ignored)
+          {
+          }
+        }
+      }
+    }
+    catch (Throwable ignored)
+    {
+    }
+    // Reset aggregate/manager state so a new group starts on a clean slate
+    try
+    {
+      synchronized (aggLock)
+      {
+        runActive = false;
+        runStartNanos = 0L;
+        runStartEpochMs = 0L;
+        plannedByPort = null;
+        plannedBaseConfig = null;
+        plannedGroupProperties = null;
+        runInitialWorstRemainingMs = 0L;
+        try { if (aggFuture != null && !aggFuture.isDone()) { aggFuture.complete(null); } } catch (Throwable ignored) {}
+        aggFuture = null;
+        try { aggregateFinalized.set(false); } catch (Throwable ignored) {}
+      }
+      // Clear live stats maps/sets
+      attemptsByMessage.clear();
+      terminalMessages.clear();
+      messageStartNanos.clear();
+      messageEndNanos.clear();
+      failures.clear();
+      messageIdToPort.clear();
+      plannedIds.clear();
+    }
+    catch (Throwable ignored)
+    {
+    }
+    // Breathing room to allow underlying timeouts/timers to stop
+    long delay = Math.max(0L, settleMillis);
+    try { Thread.sleep(delay); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+  }
+
+  /**
    * Enqueue a list of messages for one COM port as a FIFO group.
    */
   public Uni<GroupResult> enqueueGroup(Integer comPort, List<MessageSpec> specs, Config baseConfig)
   {
-    // NOTE: Do not globally preempt other ports here. That causes only the last enqueued group to run
-    // when multiple groups are enqueued in quick succession. We only cancel the same-port sender below
-    // if it is currently active, allowing other ports (or prior groups) to complete naturally.
+    // If a run is currently active, only cancel/reset when this is a standalone enqueue
+    // and NOT part of an already-initialized multi-port plan.
+    boolean mustReset = false;
+    synchronized (aggLock)
+    {
+      boolean inMultiPortPlan = runActive && this.plannedByPort != null && !this.plannedByPort.isEmpty() && this.plannedByPort.containsKey(comPort);
+      mustReset = runActive && !inMultiPortPlan;
+    }
+    if (mustReset)
+    {
+      log.debug("Preempting existing run before enqueueing single-port group on COM{} (standalone)", comPort);
+      cancelAllAndReset("New group enqueued – cancelling current run", 100L);
+    }
+
     TimedComPortSender sender = getOrCreateSender(comPort, baseConfig);
     int count = (specs == null ? 0 : specs.size());
     log.trace("🚀 Enqueueing group on COM{} with {} messages{}", comPort, count, pausedAll.get() ? " (manager paused)" : "");
@@ -647,12 +720,12 @@ public class MultiTimedComPortSender
     {
       sender.pause();
     }
-    // If the sender is currently running a group/message, cancel it, wait 200ms, then start the next group
+    // If the sender is currently running a group/message, cancel it, wait 100ms, then start the next group
     if (sender.hasActiveGroupOrMessage())
     {
       try { sender.cancel("New group enqueued – cancelling current", true); } catch (Throwable ignored) {}
       return Uni.createFrom().voidItem()
-          .onItem().delayIt().by(Duration.ofMillis(20))
+          .onItem().delayIt().by(Duration.ofMillis(100))
           .onItem().transformToUni(v -> sender.enqueueGroup(specs));
     }
     return sender.enqueueGroup(specs);
@@ -682,8 +755,21 @@ public class MultiTimedComPortSender
         preemptExisting = Boolean.TRUE.equals(b);
       }
     } catch (Throwable ignored) {}
+    // If a run is already active and the caller did not explicitly request to preserve it,
+    // proactively preempt active senders so that aggregate statistics do not mix runs while
+    // prior messages are still timing out/waiting for responses. This avoids transient
+    // inconsistent statistics during back-to-back group scheduling.
+    try {
+      boolean hasActive;
+      synchronized (aggLock) {
+        hasActive = runActive;
+      }
+      if (hasActive && !preemptExisting) {
+        preemptExisting = true;
+      }
+    } catch (Throwable ignored) {}
     if (preemptExisting) {
-      try { preemptAllActiveSenders("New multi-port group enqueued – preempting active senders"); } catch (Throwable ignored) {}
+      try { cancelAllAndReset("New multi-port group enqueued – resetting state", 100L); } catch (Throwable ignored) {}
     }
     if (byPort == null || byPort.isEmpty())
     {

@@ -1,0 +1,10 @@
+{
+  "servers": [
+    {
+      "name": "mermaid",
+      "type": "http",
+      "url": "https://mcp.mermaidchart.com/mcp",
+      "description": "Render and validate Mermaid diagrams for architecture docs"
+    }
+  ]
+}
