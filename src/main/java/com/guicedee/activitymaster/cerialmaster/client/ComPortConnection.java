@@ -17,6 +17,7 @@ import java.io.Serial;
 import java.io.Serializable;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 import static com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility.*;
 
@@ -59,7 +60,7 @@ public class ComPortConnection<J extends ComPortConnection<J>>
 	private static final Set<IReceiveMessage<?>> receivers = new LinkedHashSet<>();
 
 	@JsonIgnore
-	private static final Set<IComPortStatusChanged<?>> statusListeners = new LinkedHashSet<>();
+	private static final Set<IComPortStatusChanged<?>> statusListeners = new CopyOnWriteArraySet<>();
 
 	@JsonIgnore
 	private final java.util.Set<java.util.function.BiConsumer<CerialPortConnection<?>, ComPortStatus>> statusUpdateCallbacks =
