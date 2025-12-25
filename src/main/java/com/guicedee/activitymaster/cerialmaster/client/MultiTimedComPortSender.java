@@ -347,8 +347,27 @@ public class MultiTimedComPortSender
       };
     }
     statsConsumers.add(consumer);
-    // Ensure at least one snapshot is sent soon after registration
-    scheduleAggregatePublish();
+
+    // Provide an immediate initial update to the new consumer if possible
+    try
+    {
+      final AggregateProgress agg = computeAggregateSnapshot(false);
+      final com.guicedee.activitymaster.cerialmaster.client.ManagerSnapshot snap = buildManagerSnapshot(agg, 25, 100);
+      Infrastructure.getDefaultExecutor()
+                  .execute(() -> {
+                    try
+                    {
+                      consumer.accept(snap);
+                    }
+                    catch (Throwable ignored)
+                    {
+                    }
+                  });
+    }
+    catch (Throwable ignored)
+    {
+    }
+
     return () -> statsConsumers.remove(consumer);
   }
 
@@ -1918,10 +1937,13 @@ public class MultiTimedComPortSender
       v.fingerprintSupplier = fingerprintSupplier;
       return v;
     });
-    // If no task scheduled, schedule one now with random delay 300-700ms
+
+    boolean isFirst = !lastFingerprintByAddress.containsKey(address);
+
+    // If no task scheduled, schedule one now with random delay 300-700ms (or 10ms if first)
     if (entry.future == null || entry.future.isDone())
     {
-      int delay = 300 + eventRng.nextInt(401); // 300..700
+      int delay = isFirst ? 10 : (300 + eventRng.nextInt(401)); // 10 or 300..700
       // capture the sequence at schedule time so older schedules are rejected if a newer one ran
       entry.scheduledSeq = globalPublishSeq.incrementAndGet();
       entry.future = eventScheduler.schedule(() -> {
@@ -2004,9 +2026,12 @@ public class MultiTimedComPortSender
       v.fingerprintSupplier = fingerprintSupplier;
       return v;
     });
+
+    boolean isFirst = !consumerLastFp.containsKey(key);
+
     if (entry.future == null || entry.future.isDone())
     {
-      int delay = 300 + eventRng.nextInt(401);
+      int delay = isFirst ? 10 : (300 + eventRng.nextInt(401));
       entry.scheduledSeq = globalPublishSeq.incrementAndGet();
       entry.future = eventScheduler.schedule(() -> {
         try
