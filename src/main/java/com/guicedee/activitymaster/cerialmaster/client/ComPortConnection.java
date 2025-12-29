@@ -66,9 +66,6 @@ public class ComPortConnection<J extends ComPortConnection<J>>
 	private final java.util.Set<java.util.function.BiConsumer<CerialPortConnection<?>, ComPortStatus>> statusUpdateCallbacks =
 			new java.util.concurrent.CopyOnWriteArraySet<>();
 
-	@JsonIgnore
-	private IResourceItem<?, ?> resourceItem;
-
 	public ComPortConnection()
 	{
 
@@ -109,25 +106,11 @@ public class ComPortConnection<J extends ComPortConnection<J>>
 
 	public @org.jspecify.annotations.NonNull J setResourceItem(IResourceItem<?, ?> item)
 	{
-		this.resourceItem = item;
 		setId(item.getId());
 		//noinspection unchecked
 		return (J) this;
 	}
-
-	public Uni<IResourceItem<?, ?>> getResourceItem(Mutiny.Session session)
-	{
-		if (resourceItem == null && id != null)
-		{
-			IResourceItemService<?> service = com.guicedee.client.IGuiceContext.get(IResourceItemService.class);
-			return service.findByUUID(session, id);
-		}
-		else if (resourceItem != null)
-			return Uni.createFrom().item(resourceItem);
-		else
-			return Uni.createFrom().failure(new RuntimeException("No resource item found, id not set"));
-	}
-
+	
 	public Set<IReceiveMessage<?>> getReceivers()
 	{
 		if (receivers.isEmpty())

@@ -1711,6 +1711,9 @@ public class TimedComPortSender
       return false;
     }
     ComPortConnection<?> c = getCanonicalConnection();
+    Config config = activeConfig != null ? activeConfig : defaultConfig;
+    long timeout = config.writeTimeoutMs;
+
     // Directly use write(String, boolean) if available as per API contract
     try
     {
@@ -1718,8 +1721,42 @@ public class TimedComPortSender
       {
         return false;
       }
-      c.write(payload, true);
-      return true;
+      CompletableFuture<Void> writeFuture = CompletableFuture.runAsync(() -> {
+        c.write(payload, true);
+      }, Infrastructure.getDefaultExecutor());
+      try
+      {
+        writeFuture.get(timeout, TimeUnit.MILLISECONDS);
+        return true;
+      }
+      catch (TimeoutException e)
+      {
+        c.getLog()
+         .warn("⚠️ Write operation blocked for more than {}ms on COM{}. Reconnecting...", timeout, c.getComPort());
+        try
+        {
+          c.disconnect();
+          c.connect();
+        }
+        catch (Throwable t)
+        {
+          c.getLog()
+           .error("Failed to reconnect after write timeout", t);
+        }
+        return false;
+      }
+      catch (ExecutionException e)
+      {
+        if (e.getCause() instanceof NoSuchMethodError || e.getCause() instanceof UnsupportedOperationException)
+        {
+          throw (Exception) e.getCause();
+        }
+        return false;
+      }
+      catch (Throwable t)
+      {
+        return false;
+      }
     }
     catch (NoSuchMethodError | UnsupportedOperationException e)
     {
@@ -1730,8 +1767,34 @@ public class TimedComPortSender
         {
           return false;
         }
-        c.write(payload);
-        return true;
+        CompletableFuture<Void> writeFuture = CompletableFuture.runAsync(() -> {
+          c.write(payload);
+        }, Infrastructure.getDefaultExecutor());
+        try
+        {
+          writeFuture.get(timeout, TimeUnit.MILLISECONDS);
+          return true;
+        }
+        catch (TimeoutException te)
+        {
+          c.getLog()
+           .warn("⚠️ Fallback write operation blocked for more than {}ms on COM{}. Reconnecting...", timeout, c.getComPort());
+          try
+          {
+            c.disconnect();
+            c.connect();
+          }
+          catch (Throwable t)
+          {
+            c.getLog()
+             .error("Failed to reconnect after fallback write timeout", t);
+          }
+          return false;
+        }
+        catch (Throwable t)
+        {
+          return false;
+        }
       }
       catch (Throwable t)
       {

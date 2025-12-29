@@ -15,6 +15,7 @@ public class Config implements INgDataType<Config>
 		private int assignedRetry = 3;
 		public long assignedDelayMs = 2800;
 		public long assignedTimeoutMs = 3000;
+		public long writeTimeoutMs = 5000;
 		/**
 			* When true, the sender will always wait the full timeout after a send, even if externally marked completed earlier.
 			*/
