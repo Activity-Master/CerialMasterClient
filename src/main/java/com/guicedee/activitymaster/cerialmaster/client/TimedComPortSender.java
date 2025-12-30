@@ -754,6 +754,19 @@ public class TimedComPortSender
               scheduleNext(Math.max(50, (activeConfig != null ? activeConfig.assignedDelayMs : defaultConfig.assignedDelayMs)));
               return;
             }
+            // Hardware failure statuses should immediately terminate without retry to avoid loops
+            try {
+              if (status == com.guicedee.cerial.enumerations.ComPortStatus.Missing
+                  || status == com.guicedee.cerial.enumerations.ComPortStatus.InUse
+                  || status == com.guicedee.cerial.enumerations.ComPortStatus.Failed)
+              {
+                String msg = "Hardware failure status: " + status;
+                emit(new StatusUpdate(attemptNum, State.Error, msg));
+                emitMessageProgress(new MessageProgress(activeMessageId(), activeMessageTitle(), activeMessagePayload(), attemptNum, State.Error, activeConfig, defaultConfig, msg));
+                notifyTerminal(buildCurrentMessageResult(State.Error));
+                return;
+              }
+            } catch (Throwable ignored) {}
             // If not active (offline/exception), treat as non-terminal failed attempt and continue retries/timeout
             if (!com.guicedee.cerial.enumerations.ComPortStatus.portActive.contains(status)) {
               if (com.guicedee.cerial.enumerations.ComPortStatus.exceptionOperations.contains(status)
@@ -1667,6 +1680,21 @@ public class TimedComPortSender
     {
     }
     return connection;
+  }
+
+  /**
+   * Returns the current ComPortStatus of the underlying canonical connection, or null on error.
+   */
+  public com.guicedee.cerial.enumerations.ComPortStatus getCurrentStatus()
+  {
+    try
+    {
+      return getCanonicalConnection().getComPortStatus();
+    }
+    catch (Throwable ignored)
+    {
+      return null;
+    }
   }
 
   private void ensureConnectedDirect() throws Exception

@@ -996,6 +996,8 @@ public class MultiTimedComPortSender
     Map<Integer, List<MessageSpec>> retryMap = new LinkedHashMap<>();
     for (com.guicedee.activitymaster.cerialmaster.client.Failure f : failsSnapshot)
     {
+      // Skip hardware failures — these must not be retried
+      try { if (f.hardwareFailure) { continue; } } catch (Throwable ignored) {}
       Map<String, MessageSpec> m = lookup.get(f.comPort);
       if (m == null)
       {
@@ -1172,7 +1174,22 @@ public class MultiTimedComPortSender
           {
             title = (id == null || id.isBlank()) ? "" : id;
           }
-          failures.add(new Failure(port, id, title, fname, mp.state));
+          // Determine hardware failure based on current port status snapshot
+          com.guicedee.cerial.enumerations.ComPortStatus statusAtFailure = null;
+          boolean hardware = false;
+          try {
+            TimedComPortSender s = null;
+            try { s = this.senders.get(port); } catch (Throwable ignored2) {}
+            if (s != null) {
+              try { statusAtFailure = s.getCurrentStatus(); } catch (Throwable ignored3) {}
+            }
+            if (statusAtFailure != null) {
+              hardware = (statusAtFailure == com.guicedee.cerial.enumerations.ComPortStatus.Missing
+                      || statusAtFailure == com.guicedee.cerial.enumerations.ComPortStatus.InUse
+                      || statusAtFailure == com.guicedee.cerial.enumerations.ComPortStatus.Failed);
+            }
+          } catch (Throwable ignored1) {}
+          failures.add(new Failure(port, id, title, fname, mp.state, statusAtFailure, hardware));
         }
       }
       if (id != null && plannedIds.contains(id))
