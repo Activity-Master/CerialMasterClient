@@ -417,13 +417,19 @@ public class MultiTimedComPortSender
 				log.info("🚀 Initializing CerialMaster MultiTimedComPortSender manager");
 				this.rawStatus = Multi
 																						.createFrom()
-																						.emitter((MultiEmitter<? super ManagerStatus> e) -> this.statusEmitters.add(e))
+																						.emitter((MultiEmitter<? super ManagerStatus> e) -> {
+																								this.statusEmitters.add(e);
+																								e.onTermination(() -> this.statusEmitters.remove(e));
+																						})
 																						.onOverflow()
 																						.drop()
 																						.emitOn(Infrastructure.getDefaultExecutor());
 				this.rawProgress = Multi
 																								.createFrom()
-																								.emitter((MultiEmitter<? super ManagerMessageProgress> e) -> this.progressEmitters.add(e))
+																								.emitter((MultiEmitter<? super ManagerMessageProgress> e) -> {
+																										this.progressEmitters.add(e);
+																										e.onTermination(() -> this.progressEmitters.remove(e));
+																								})
 																								.onOverflow()
 																								.drop()
 																								.emitOn(Infrastructure.getDefaultExecutor());
@@ -703,18 +709,26 @@ public class MultiTimedComPortSender
 			*/
 		public Uni<GroupResult> enqueueGroup(Integer comPort, List<MessageSpec> specs, Config baseConfig)
 		{
+				return enqueueGroup(comPort, specs, baseConfig, true);
+		}
+
+		private Uni<GroupResult> enqueueGroup(Integer comPort, List<MessageSpec> specs, Config baseConfig, boolean standalone)
+		{
 				// If a run is currently active, only cancel/reset when this is a standalone enqueue
-				// and NOT part of an already-initialized multi-port plan.
+				// and the port is already busy or we've explicitly requested to reset.
 				boolean mustReset = false;
 				synchronized (aggLock)
 				{
-						boolean inMultiPortPlan = runActive && this.plannedByPort != null && !this.plannedByPort.isEmpty() && this.plannedByPort.containsKey(comPort);
-						mustReset = runActive && !inMultiPortPlan;
+						// If a run is currently active, we only preempt/reset if the port is already in the current run
+						// or if we truly want to force a clean slate for the whole manager.
+						// To preserve asynchronous port execution, different ports are allowed to join the current run.
+						mustReset = standalone && runActive && this.plannedByPort != null && this.plannedByPort.containsKey(comPort);
+						log.trace("Checking mustReset for COM{}: standalone={}, runActive={}, plannedByPortKeys={}, mustReset={}", comPort, standalone, runActive, (plannedByPort != null ? plannedByPort.keySet() : "null"), mustReset);
 				}
 				if (mustReset)
 				{
-						log.debug("Preempting existing run before enqueueing single-port group on COM{} (standalone)", comPort);
-						cancelAllAndReset("New group enqueued – cancelling current run", 100L);
+						log.debug("Preempting existing run before enqueueing single-port group on COM{} (standalone conflict)", comPort);
+						cancelAllAndReset("New group enqueued – cancelling current run due to port conflict", 100L);
 				}
 				
 				TimedComPortSender sender = getOrCreateSender(comPort, baseConfig);
@@ -799,6 +813,40 @@ public class MultiTimedComPortSender
 								}
 								this.runInitialWorstRemainingMs = Math.max(0L, portWorst);
 								this.aggFuture = new java.util.concurrent.CompletableFuture<>();
+						}
+						else if (standalone && this.runActive)
+						{
+								// We are adding to an existing run. Update plannedByPort and plannedIds.
+								if (this.plannedByPort == null)
+								{
+										this.plannedByPort = new LinkedHashMap<>();
+								}
+								this.plannedByPort.put(comPort, List.copyOf(specs));
+								try
+								{
+										if (specs != null)
+										{
+												for (MessageSpec spec : specs)
+												{
+														if (spec != null && spec.getId() != null)
+														{
+																plannedIds.add(spec.getId());
+														}
+												}
+										}
+								}
+								catch (Throwable ignored) {}
+								// Recompute runInitialWorstRemainingMs (approximate merge)
+								long additionalWorst = 0L;
+								for (MessageSpec spec : specs)
+								{
+										if (spec != null)
+										{
+												long msgBudget = retryBudgetForMessage(spec);
+												additionalWorst += (msgBudget * delayMsForMessage(spec) + timeoutMsForMessage(spec));
+										}
+								}
+								this.runInitialWorstRemainingMs = Math.max(this.runInitialWorstRemainingMs, additionalWorst);
 						}
 				}
 				// Publish an initial aggregate snapshot if we started a single-port plan
@@ -1023,7 +1071,7 @@ public class MultiTimedComPortSender
 						// after ALL ports have either completed or errored (connection errors included).
 						// This satisfies the requirement that the overall "completed" signal only fires
 						// after all senders are done or have a connection error, instead of failing fast.
-						Uni<GroupResult> safeUni = enqueueGroup(p, byPort.get(p), baseConfig)
+						Uni<GroupResult> safeUni = enqueueGroup(p, byPort.get(p), baseConfig, false)
 																																		.onFailure()
 																																		.recoverWithItem(err -> {
 																																				try
@@ -1369,13 +1417,11 @@ public class MultiTimedComPortSender
 										if (plannedTotal > 0)
 										{
 												int terminalCount = terminalMessages.size(); // only contains planned IDs due to the guard above
-												boolean isSinglePortRun = (byPort.size() <= 1);
-												if (isSinglePortRun)
+												// Auto-finalize when all planned messages have reached a terminal state.
+												// This covers both single-port enqueues and multi-port runs.
+												if (terminalCount >= plannedTotal && runActive)
 												{
-														if (terminalCount >= plannedTotal && runActive)
-														{
-																finalizeAggregate();
-														}
+														finalizeAggregate();
 												}
 										}
 								}
@@ -1518,7 +1564,7 @@ public class MultiTimedComPortSender
 				return Math.max(0, cfg.assignedTimeoutMs);
 		}
 		
-		AggregateProgress computeAggregateSnapshot(boolean finishing)
+		public AggregateProgress computeAggregateSnapshot(boolean finishing)
 		{
 				Map<Integer, List<MessageSpec>> byPort = this.plannedByPort;
 				if (byPort == null)
@@ -1711,7 +1757,18 @@ public class MultiTimedComPortSender
 				}
 				return Uni
 												.createFrom()
-												.completionStage(f);
+												.emitter(e -> {
+														f.whenComplete((res, err) -> {
+																if (err != null)
+																{
+																		e.fail(err);
+																}
+																else
+																{
+																		e.complete(res);
+																}
+														});
+												});
 		}
 		
 		/**
@@ -1727,7 +1784,7 @@ public class MultiTimedComPortSender
 								log.error("Error in onGroupCompleted subscriber: {}", t.toString(), t);
 						}
 						catch (Throwable ignored) {}
-				}, true);
+				}, false);
 		}
 		
 		/**
@@ -1737,7 +1794,7 @@ public class MultiTimedComPortSender
 		public java.lang.AutoCloseable onGroupCompleted(java.util.function.Consumer<AggregateProgress> consumer,
 																																																		java.util.function.Consumer<java.lang.Throwable> onError)
 		{
-				return onGroupCompleted(consumer, onError, true);
+				return onGroupCompleted(consumer, onError, false);
 		}
 		
 		/**
@@ -1794,9 +1851,13 @@ public class MultiTimedComPortSender
 						try
 						{
 								holder[0] = uni
-																					.emitOn(io.smallrye.mutiny.infrastructure.Infrastructure.getDefaultExecutor())
 																					.subscribe()
-																					.with(consumer, t -> {
+																					.with(item -> {
+																							if (item != null)
+																							{
+																									consumer.accept(item);
+																							}
+																					}, t -> {
 																							try
 																							{
 																									if (onError != null)

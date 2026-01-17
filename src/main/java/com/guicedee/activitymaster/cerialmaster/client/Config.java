@@ -21,6 +21,10 @@ public class Config implements INgDataType<Config>
 			*/
 		public boolean alwaysWaitFullTimeoutAfterSend = false;
 		/**
+		 * When true, the sender will wait for only the current try to finish and then stop if a reply is received.
+		 */
+		public boolean waitOnlyForCurrentTry = false;
+		/**
 		 * When true, the task will be treated as successful once the total wait of
 		 * (assignedRetry x assignedDelayMs) + assignedTimeoutMs has elapsed,
 		 * even if no success was otherwise signaled.
@@ -39,6 +43,11 @@ public class Config implements INgDataType<Config>
 		
 		public Config(int assignedRetry, long assignedDelayMs, long assignedTimeoutMs, boolean alwaysWaitFullTimeoutAfterSend)
 		{
+				this(assignedRetry, assignedDelayMs, assignedTimeoutMs, alwaysWaitFullTimeoutAfterSend, false);
+		}
+
+		public Config(int assignedRetry, long assignedDelayMs, long assignedTimeoutMs, boolean alwaysWaitFullTimeoutAfterSend, boolean waitOnlyForCurrentTry)
+		{
 				if (assignedRetry < 0)
 				{
 						throw new IllegalArgumentException("assignedRetry must be >= 0");
@@ -55,5 +64,6 @@ public class Config implements INgDataType<Config>
 				this.assignedDelayMs = assignedDelayMs;
 				this.assignedTimeoutMs = assignedTimeoutMs;
 				this.alwaysWaitFullTimeoutAfterSend = alwaysWaitFullTimeoutAfterSend;
+				this.waitOnlyForCurrentTry = waitOnlyForCurrentTry;
 		}
 }

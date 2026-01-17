@@ -92,7 +92,7 @@ public class TimedComPortSender
     {
       return cc;
     }
-    return new Config(c.getAssignedRetry(), c.assignedDelayMs, c.assignedTimeoutMs, c.alwaysWaitFullTimeoutAfterSend);
+    return new Config(c.getAssignedRetry(), c.assignedDelayMs, c.assignedTimeoutMs, c.alwaysWaitFullTimeoutAfterSend, c.waitOnlyForCurrentTry);
   }
 
   private final AtomicInteger attempts = new AtomicInteger(0);
@@ -114,10 +114,10 @@ public class TimedComPortSender
 
   // Reactive status streams
   private final Multi<com.guicedee.activitymaster.cerialmaster.client.StatusUpdate> status;
-  private MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.StatusUpdate> emitter;
+  private final java.util.Set<MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.StatusUpdate>> statusEmitters = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
   private final Multi<com.guicedee.activitymaster.cerialmaster.client.MessageProgress> messageProgress;
-  private MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.MessageProgress> messageEmitter;
+  private final java.util.Set<MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.MessageProgress>> messageEmitters = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
   // Group processing structures
   private static class GroupRequest
@@ -283,14 +283,18 @@ public class TimedComPortSender
     });
 
     this.status = Multi.createFrom()
-                      .emitter((MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.StatusUpdate> e) -> this.emitter = e)
-                      .onOverflow()
-                      .drop()
+                      .emitter((MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.StatusUpdate> e) -> {
+                        this.statusEmitters.add(e);
+                        e.onTermination(() -> this.statusEmitters.remove(e));
+                      })
+                      .onOverflow().drop()
                       .emitOn(Infrastructure.getDefaultExecutor());
     this.messageProgress = Multi.createFrom()
-                               .emitter((MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.MessageProgress> e) -> this.messageEmitter = e)
-                               .onOverflow()
-                               .drop()
+                               .emitter((MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.MessageProgress> e) -> {
+                                 this.messageEmitters.add(e);
+                                 e.onTermination(() -> this.messageEmitters.remove(e));
+                               })
+                               .onOverflow().drop()
                                .emitOn(Infrastructure.getDefaultExecutor());
     emit(new com.guicedee.activitymaster.cerialmaster.client.StatusUpdate(0, State.Idle, "Initialized"));
     emitMessageProgress(new com.guicedee.activitymaster.cerialmaster.client.MessageProgress(null, null, null, 0, State.Idle, defaultConfig, defaultConfig, "Initialized"));
@@ -443,37 +447,84 @@ public class TimedComPortSender
     }
     Config cfg = this.activeConfig != null ? this.activeConfig : this.defaultConfig;
     boolean alwaysWait = (cfg != null && cfg.alwaysWaitFullTimeoutAfterSend);
+    boolean waitOnlyCurrent = (cfg != null && cfg.waitOnlyForCurrentTry);
 
-    if (alwaysWait)
+    if (alwaysWait || waitOnlyCurrent)
     {
       // Record external completion and wait for the configured timeout to elapse before finalizing
       if (this.externallyCompleted.compareAndSet(false, true))
       {
-        // If completion is triggered before any attempt occurred, perform a best-effort single connect+send
-        try
+        if (waitOnlyCurrent)
         {
-          if (attempts.get() == 0)
+          // if waitOnlyCurrent is true, we ONLY wait if an attempt is currently in progress.
+          // if we are between attempts, we complete immediately
+          synchronized (lock)
           {
-            ensureConnectedDirect();
-            trySendDirect(activeMessagePayload());
+            boolean active = inAttempt.get();
+            if (!active)
+            {
+              // complete immediately
+              this.externallyCompleted.set(false); // reset for immediate completion logic
+            }
+            else
+            {
+              emit(new com.guicedee.activitymaster.cerialmaster.client.StatusUpdate(attempts.get(), State.Running, "Externally completed; waiting for current try"));
+              emitMessageProgress(new com.guicedee.activitymaster.cerialmaster.client.MessageProgress(activeMessageId(), activeMessageTitle(), activeMessagePayload(), attempts.get(), State.Running, activeConfig, defaultConfig, "Externally completed; waiting for current try"));
+              return;
+            }
           }
         }
-        catch (Throwable ignored)
+        else
         {
-        }
-        // Ensure a timeout schedule exists. If already scheduled (from a successful attempt), do not reset it.
-        synchronized (lock)
-        {
-          if (currentSchedule == null || currentSchedule.isDone())
+          // alwaysWait case
+          // If completion is triggered before any attempt occurred, perform a best-effort single connect+send
+          try
           {
-            waitForTimeoutOrCompletion();
+            if (attempts.get() == 0)
+            {
+              ensureConnectedDirect();
+              trySendDirect(activeMessagePayload());
+            }
           }
+          catch (Throwable ignored)
+          {
+          }
+          // Ensure a timeout schedule exists. If already scheduled (from a successful attempt), do not reset it.
+          synchronized (lock)
+          {
+            if (currentSchedule == null || currentSchedule.isDone())
+            {
+              waitForTimeoutOrCompletion();
+            }
+          }
+          emit(new com.guicedee.activitymaster.cerialmaster.client.StatusUpdate(attempts.get(), State.Running, "Externally completed; waiting for timeout"));
+          emitMessageProgress(new com.guicedee.activitymaster.cerialmaster.client.MessageProgress(activeMessageId(), activeMessageTitle(), activeMessagePayload(), attempts.get(), State.Running, activeConfig, defaultConfig, "Externally completed; waiting for timeout"));
+          return;
         }
-        emit(new com.guicedee.activitymaster.cerialmaster.client.StatusUpdate(attempts.get(), State.Running, "Externally completed; waiting for timeout"));
-        emitMessageProgress(new com.guicedee.activitymaster.cerialmaster.client.MessageProgress(activeMessageId(), activeMessageTitle(), activeMessagePayload(), attempts.get(), State.Running, activeConfig, defaultConfig, "Externally completed; waiting for timeout"));
       }
-      // Keep handling flag until terminalization callback occurs
-      return;
+      else
+      {
+        // If it was already externally completed, we should still return here to avoid immediate completion
+        // unless we are in the waitOnlyCurrent mode and between attempts.
+        if (waitOnlyCurrent)
+        {
+           synchronized (lock)
+           {
+             if (!inAttempt.get())
+             {
+                // Fall through to immediate completion below
+             }
+             else
+             {
+                return;
+             }
+           }
+        }
+        else
+        {
+          return;
+        }
+      }
     }
 
     // Immediate completion behavior when not configured to wait full timeout
@@ -630,7 +681,8 @@ public class TimedComPortSender
    */
   public void start(String payload)
   {
-    start(payload, new com.guicedee.activitymaster.cerialmaster.client.Config(defaultConfig.getAssignedRetry(), defaultConfig.assignedDelayMs, defaultConfig.assignedTimeoutMs, defaultConfig.alwaysWaitFullTimeoutAfterSend));
+    Config cfg = this.activeConfig != null ? this.activeConfig : this.defaultConfig;
+    start(payload, new com.guicedee.activitymaster.cerialmaster.client.Config(cfg.getAssignedRetry(), cfg.assignedDelayMs, cfg.assignedTimeoutMs, cfg.alwaysWaitFullTimeoutAfterSend, cfg.waitOnlyForCurrentTry));
   }
 
   /**
@@ -700,16 +752,22 @@ public class TimedComPortSender
     }
   }
 
+  private final AtomicBoolean inAttempt = new AtomicBoolean(false);
+
   private void doAttempt()
   {
     // Guard against race with cancellation/completion/pause
-    if (cancelled.get() || completed.get())
+    synchronized (lock)
     {
-      return;
-    }
-    if (paused.get())
-    { // reschedule when resumed
-      return;
+      if (cancelled.get() || completed.get())
+      {
+        return;
+      }
+      if (paused.get())
+      { // reschedule when resumed
+        return;
+      }
+      inAttempt.set(true);
     }
     int attemptNum = attempts.incrementAndGet();
     try
@@ -825,6 +883,10 @@ public class TimedComPortSender
 
   private void onAttemptFinished(boolean success, int attemptNum, Throwable error)
   {
+    synchronized (lock)
+    {
+      inAttempt.set(false);
+    }
     if (cancelled.get() || completed.get())
     {
       return;
@@ -845,6 +907,20 @@ public class TimedComPortSender
     if (delay < 25)
     {
       delay = 25; // minimal backoff to avoid busy looping
+    }
+
+    if (externallyCompleted.get() && cfg.waitOnlyForCurrentTry)
+    {
+      // If we are waiting ONLY for the current try, complete immediately regardless of success/failure
+      if (completed.compareAndSet(false, true))
+      {
+        cancelCurrentSchedule();
+        String msg = success ? "Completed on current try success" : "Completed on current try finished";
+        emit(new StatusUpdate(attemptNum, State.Completed, msg));
+        emitMessageProgress(new MessageProgress(activeMessageId(), activeMessageTitle(), activeMessagePayload(), attemptNum, State.Completed, activeConfig, defaultConfig, msg));
+        notifyTerminal(buildCurrentMessageResult(State.Completed));
+      }
+      return;
     }
 
     // If the attempt succeeded but we have not received external completion yet, continue retrying
@@ -921,10 +997,15 @@ public class TimedComPortSender
     {
       return;
     }
-    MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.StatusUpdate> e = emitter;
-    if (e != null)
+    for (MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.StatusUpdate> e : statusEmitters)
     {
-      e.emit(update);
+      try
+      {
+        e.emit(update);
+      }
+      catch (Throwable ignored)
+      {
+      }
     }
     // schedule stats update on status changes
     scheduleSnapshotPublish();
@@ -987,10 +1068,15 @@ public class TimedComPortSender
     }
     if (!this.suppressTelemetry.get())
     {
-      MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.MessageProgress> e = messageEmitter;
-      if (e != null)
+      for (MultiEmitter<? super com.guicedee.activitymaster.cerialmaster.client.MessageProgress> e : messageEmitters)
       {
-        e.emit(update);
+        try
+        {
+          e.emit(update);
+        }
+        catch (Throwable ignored)
+        {
+        }
       }
       // schedule stats update on message progress
       scheduleSnapshotPublish();
@@ -1034,8 +1120,14 @@ public class TimedComPortSender
    */
   public Uni<MessageResult> onMessageResult(String id)
   {
+    CompletableFuture<MessageResult> f = ensureFutureForId(id);
     return Uni.createFrom()
-               .completionStage(ensureFutureForId(id));
+               .emitter(e -> {
+                 f.whenComplete((res, err) -> {
+                   if (err != null) e.fail(err);
+                   else e.complete(res);
+                 });
+               });
   }
 
   /**
@@ -1055,8 +1147,6 @@ public class TimedComPortSender
         terminalListener = (result) -> onMessageTerminal(result);
         currentMessageFuture = f;
         start(spec.getPayload(), adaptConfig(spec.getConfig()));
-        return Uni.createFrom()
-                   .completionStage(f);
       }
       else
       {
@@ -1067,10 +1157,15 @@ public class TimedComPortSender
         {
           processNextPriorityLocked();
         }
-        return Uni.createFrom()
-                   .completionStage(f);
       }
     }
+    return Uni.createFrom()
+               .emitter(e -> {
+                 f.whenComplete((res, err) -> {
+                   if (err != null) e.fail(err);
+                   else e.complete(res);
+                 });
+               });
   }
 
   /**
@@ -1089,7 +1184,12 @@ public class TimedComPortSender
       }
     }
     return Uni.createFrom()
-               .completionStage(f);
+               .emitter(e -> {
+                 f.whenComplete((res, err) -> {
+                   if (err != null) e.fail(err);
+                   else e.complete(res);
+                 });
+               });
   }
 
   // ===== Group processing API =====
@@ -1136,7 +1236,12 @@ public class TimedComPortSender
       }
     }
     return Uni.createFrom()
-               .completionStage(cf);
+               .emitter(e -> {
+                 cf.whenComplete((res, err) -> {
+                   if (err != null) e.fail(err);
+                   else e.complete(res);
+                 });
+               });
   }
 
   private void moveToNextGroupLocked()
@@ -1305,7 +1410,10 @@ public class TimedComPortSender
           // after completion, no waiting or sending; tasks remaining and worstRemaining 0
         }
       }
-      totalPlanned = planned.size();
+      if (planned != null && !planned.isEmpty())
+      {
+        totalPlanned = planned.size();
+      }
       // Build sending stat
       if (activeMessage != null)
       {

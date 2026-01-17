@@ -197,17 +197,18 @@ public class ComPortConnection<J extends ComPortConnection<J>>
 			}
 		}
 		// Fire local per-connection callbacks registered via the superclass-style API
-		/*for (java.util.function.BiConsumer<CerialPortConnection<?>, ComPortStatus> cb : statusUpdateCallbacks)
+		for (java.util.function.BiConsumer<CerialPortConnection<?>, ComPortStatus> cb : statusUpdateCallbacks)
 		{
 			try
 			{
 				cb.accept(this, newStatus);
+				break;
 			}
 			catch (Throwable t)
 			{
 				// swallow listener exceptions
 			}
-		}*/
+		}
 	}
 
 	@Override
