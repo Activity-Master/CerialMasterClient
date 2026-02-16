@@ -294,6 +294,40 @@ public class MultiTimedComPortSender
 		private final java.util.Set<MultiEmitter<? super ManagerMessageProgress>> progressEmitters = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 		
 		private final AtomicBoolean pausedAll = new AtomicBoolean(false);
+
+		// === Enqueue rate limiting (stop processing if more than 4 enqueues within 20 seconds) ===
+		private static final long ENQUEUE_WINDOW_MS = 20_000L;
+		private static final int ENQUEUE_LIMIT = 4; // "more than 4" -> threshold is 4, trip on 5th
+		private final Object enqueueRateLock = new Object();
+		private final Deque<Long> enqueueTimestamps = new ArrayDeque<>();
+
+		/**
+		 * Records an enqueue attempt using a sliding time window and determines if the
+\t * rate limit has been exceeded. On success (under limit), the timestamp is recorded.
+\t *
+\t * @return Optional reason string if the rate limit is exceeded; empty if allowed
+\t */
+		private Optional<String> checkAndRecordEnqueueRate()
+		{
+				long now = System.currentTimeMillis();
+				synchronized (enqueueRateLock)
+				{
+						// prune timestamps older than window
+						while (!enqueueTimestamps.isEmpty() && (now - enqueueTimestamps.peekFirst()) > ENQUEUE_WINDOW_MS)
+						{
+								enqueueTimestamps.pollFirst();
+						}
+						if (enqueueTimestamps.size() >= ENQUEUE_LIMIT)
+						{
+								String msg = "Enqueue rate limit exceeded: more than " + ENQUEUE_LIMIT +
+													" enqueues within " + (ENQUEUE_WINDOW_MS / 1000) + " seconds";
+								return Optional.of(msg);
+						}
+						// under limit, record this attempt
+						enqueueTimestamps.addLast(now);
+				}
+				return Optional.empty();
+		}
 		
 		// Debounced event publishing infrastructure (per-address)
 		private final java.util.concurrent.ScheduledExecutorService eventScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
@@ -714,6 +748,20 @@ public class MultiTimedComPortSender
 
 		private Uni<GroupResult> enqueueGroup(Integer comPort, List<MessageSpec> specs, Config baseConfig, boolean standalone)
 		{
+				// Global rate-limit check for enqueue activity
+				Optional<String> rateHit = checkAndRecordEnqueueRate();
+				if (rateHit.isPresent())
+				{
+						String reason = rateHit.get();
+						log.warn("⛔ {} – stopping processing and rejecting enqueue for COM{}", reason, comPort);
+						try
+						{
+								cancelAllAndReset(reason, 100L);
+						}
+						catch (Throwable ignored) {}
+						return Uni.createFrom().failure(new IllegalStateException(reason));
+				}
+
 				// If a run is currently active, only cancel/reset when this is a standalone enqueue
 				// and the port is already busy or we've explicitly requested to reset.
 				boolean mustReset = false;
@@ -903,9 +951,23 @@ public class MultiTimedComPortSender
 			* Enqueue groups per port with custom properties, returning a Uni when all ports finish their groups.
 			*/
 		public Uni<Map<Integer, GroupResult>> enqueueGroups(Map<Integer, List<MessageSpec>> byPort,
-																																																						Config baseConfig,
-																																																						Map<String, Boolean> properties)
+																												Config baseConfig,
+																												Map<String, Boolean> properties)
 		{
+				// Global rate-limit check for enqueue activity
+				Optional<String> rateHit = checkAndRecordEnqueueRate();
+				if (rateHit.isPresent())
+				{
+						String reason = rateHit.get();
+						log.warn("⛔ {} – stopping processing and rejecting multi-port enqueue ({} ports)", reason, byPort == null ? 0 : byPort.size());
+						try
+						{
+								cancelAllAndReset(reason, 100L);
+						}
+						catch (Throwable ignored) {}
+						return Uni.createFrom().failure(new IllegalStateException(reason));
+				}
+
 				// Optionally preempt existing active senders if explicitly requested by caller via property flag.
 				boolean preemptExisting = false;
 				try
