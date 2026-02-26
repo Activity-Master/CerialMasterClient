@@ -14,8 +14,6 @@ public interface ICerialMasterService<J extends ICerialMasterService<J>>
 {
 	String CerialMasterSystemName = "Cerial Master System";
 
-	Uni<IResourceItemType<?,?>> getSerialConnectionType(Mutiny.Session session, ISystems<?,?> system, java.util.UUID... identityToken);
-
 	Uni<ComPortConnection<?>> addOrUpdateConnection(Mutiny.Session session, ComPortConnection<?> comPort, ISystems<?,?> system, java.util.UUID... identityToken);
 
 	Uni<ComPortConnection<?>> updateStatus(Mutiny.Session session, ComPortConnection<?> comPort, ISystems<?,?> system, java.util.UUID... identityToken);

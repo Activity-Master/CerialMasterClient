@@ -11,6 +11,7 @@ import io.smallrye.mutiny.subscription.MultiEmitter;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import lombok.extern.log4j.Log4j2;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -34,6 +35,7 @@ import java.util.function.BiFunction;
  * - Reactive status updates exposed via Mutiny Multi
  * - Batch (group) processing: enqueue a FIFO group of messages with per-message config and get a Uni when done
  */
+@Log4j2
 public class TimedComPortSender
 {
 
@@ -829,6 +831,7 @@ public class TimedComPortSender
             if (!com.guicedee.cerial.enumerations.ComPortStatus.portActive.contains(status)) {
               if (com.guicedee.cerial.enumerations.ComPortStatus.exceptionOperations.contains(status)
                   || com.guicedee.cerial.enumerations.ComPortStatus.portOffline.contains(status)) {
+                log.warn("Port not active: " + status);
                 emit(new StatusUpdate(attemptNum, State.Running, "Port not active: " + status));
                 emitMessageProgress(new MessageProgress(activeMessageId(), activeMessageTitle(), activeMessagePayload(), attemptNum, State.Running, activeConfig, defaultConfig, "Port not active: " + status));
                 onAttemptFinished(false, attemptNum, null);

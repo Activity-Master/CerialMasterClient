@@ -321,7 +321,7 @@ public class MultiTimedComPortSender
 						{
 								String msg = "Enqueue rate limit exceeded: more than " + ENQUEUE_LIMIT +
 													" enqueues within " + (ENQUEUE_WINDOW_MS / 1000) + " seconds";
-								return Optional.of(msg);
+							return Optional.empty();
 						}
 						// under limit, record this attempt
 						enqueueTimestamps.addLast(now);
