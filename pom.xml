@@ -52,7 +52,7 @@
 
         <dependency>
             <groupId>com.guicedee</groupId>
-            <artifactId>guiced-cerial</artifactId>
+            <artifactId>cerial</artifactId>
         </dependency>
 
         <dependency>
