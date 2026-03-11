@@ -1,5 +1,6 @@
 package com.guicedee.activitymaster.cerialmaster.client;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.jwebmp.core.base.angular.client.annotations.angular.NgDataType;
 import com.jwebmp.core.base.angular.client.services.interfaces.INgDataType;
 import lombok.Getter;
@@ -18,8 +19,10 @@ public class MessageSpec<J extends MessageSpec<J>> implements INgDataType<J>
   private String payload;
   private Config config; // per-message
   /** Optional supplier to (re)generate the payload at first attempt and on each retry. */
+  @JsonIgnore
   private java.util.function.Supplier<String> messageSupplier;
   /** Optional attempt-aware supplier: receives current attempt number (1-based). If set, takes precedence over messageSupplier. */
+  @JsonIgnore
   private java.util.function.IntFunction<String> messageByAttemptSupplier;
   /**
    * If true, this message will be treated as successfully completed at the end of its allocated timeout window,
