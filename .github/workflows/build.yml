@@ -1,0 +1,49 @@
+name: Activity Master Cerial Client
+on:
+  workflow_dispatch:
+    inputs:
+      centralRelease:
+        type: boolean
+        description: Run a release to maven central
+        default: false
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - main
+      - master
+jobs:
+  verify:
+    if: ${{ github.event_name == 'pull_request' && github.event.action != 'closed' }}
+    uses: GuicedEE/Workflows/.github/workflows/projects.yml@master
+    with:
+      baseDir: ''
+      name: 'Activity Master Cerial Client'
+      skipDeploy: 'true'
+    secrets:
+      USERNAME: ${{secrets.USERNAME}}
+      USER_TOKEN: ${{secrets.USER_TOKEN}}
+      SONA_USERNAME: ${{secrets.SONA_USERNAME}}
+      SONA_PASSWORD: ${{secrets.SONA_PASSWORD}}
+      GPG_PASSPHRASE: ${{secrets.GPG_PASSPHRASE}}
+      GPG_PRIVATE_KEY: ${{secrets.GPG_PRIVATE_KEY}}
+  deploy:
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true)
+    uses: GuicedEE/Workflows/.github/workflows/projects.yml@master
+    with:
+      baseDir: ''
+      name: 'Activity Master Cerial Client'
+      publishToCentral: ${{inputs.centralRelease}}
+    secrets:
+      USERNAME: ${{secrets.USERNAME}}
+      USER_TOKEN: ${{secrets.USER_TOKEN}}
+      SONA_USERNAME: ${{secrets.SONA_USERNAME}}
+      SONA_PASSWORD: ${{secrets.SONA_PASSWORD}}
+      GPG_PASSPHRASE: ${{secrets.GPG_PASSPHRASE}}
+      GPG_PRIVATE_KEY: ${{secrets.GPG_PRIVATE_KEY}}
