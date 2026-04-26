@@ -29,7 +29,7 @@ Add the dependency to your Maven project. Versions are managed by the parent/BOM
 
 ```xml
 <dependency>
-  <groupId>com.guicedee.activitymaster</groupId>
+  <groupId>com.activity-master</groupId>
   <artifactId>cerial-master-client</artifactId>
 </dependency>
 ```
