@@ -1147,7 +1147,7 @@ public class TimedComPortSender
       {
         // run immediately
         activeMessage = spec;
-        terminalListener = (result) -> onMessageTerminal(result);
+        terminalListener = this::onMessageTerminal;
         currentMessageFuture = f;
         start(spec.getPayload(), adaptConfig(spec.getConfig()));
       }
@@ -1326,7 +1326,7 @@ public class TimedComPortSender
     }
     activeMessage = activeGroup.specs.get(activeGroup.index);
     // set a terminal listener for this message
-    terminalListener = (result) -> onMessageTerminal(result);
+    terminalListener = this::onMessageTerminal;
     // ensure a future exists for this message id
     currentMessageFuture = ensureFutureForId(activeMessage.getId());
     // Start the message using its per-message config
@@ -1349,7 +1349,7 @@ public class TimedComPortSender
       return false;
     }
     activeMessage = next;
-    terminalListener = (result) -> onMessageTerminal(result);
+    terminalListener = this::onMessageTerminal;
     currentMessageFuture = ensureFutureForId(next.getId());
     start(next.getPayload(), adaptConfig(next.getConfig()));
     return true;

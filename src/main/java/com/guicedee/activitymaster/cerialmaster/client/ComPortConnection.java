@@ -228,7 +228,6 @@ public class ComPortConnection<J extends ComPortConnection<J>>
 		return (J) this;
 	}
 
-	@SuppressWarnings("unchecked")
 	@Override
 	public @org.jspecify.annotations.NonNull J setComPortStatusUpdate(java.util.function.BiConsumer<CerialPortConnection<?>, ComPortStatus> callback)
 	{
