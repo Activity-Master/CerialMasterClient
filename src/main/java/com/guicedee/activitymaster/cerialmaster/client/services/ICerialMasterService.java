@@ -68,4 +68,23 @@ public interface ICerialMasterService<J extends ICerialMasterService<J>> {
      * @return a {@link Uni} emitting the list of hydrated COM ports
      */
     Uni<List<CerialComPort>> listComPortsDetailed(Mutiny.Session session, ISystems<?, ?> system, java.util.UUID... identityToken);
+
+    /**
+     * Creates or updates a COM port from a strongly-typed {@link CerialComPort} DTO and returns the
+     * fully-hydrated DTO read back from the warehouse.
+     *
+     * <p>This is the DTO-facing write counterpart to {@link #findComPortDetailed} used by the REST
+     * resource. It maps the DTO onto a {@link ComPortConnection} and delegates to
+     * {@link #addOrUpdateConnection(Mutiny.Session, ComPortConnection, ISystems, java.util.UUID...)}
+     * (a genuine upsert), so a single code path persists the {@code SerialConnectionPort} resource item
+     * and its supporting classifications (COM port number, device type, status, baud rate, buffer size,
+     * data/stop bits, parity) regardless of transport. The port is keyed by its {@code comPort} number.</p>
+     *
+     * @param session       the active reactive session
+     * @param comPort       the COM port DTO to create or update (its {@code comPort} number is required)
+     * @param system        the requesting system (security scope)
+     * @param identityToken optional security identity token(s)
+     * @return a {@link Uni} emitting the hydrated, persisted {@link CerialComPort}
+     */
+    Uni<CerialComPort> addOrUpdateComPortDetailed(Mutiny.Session session, CerialComPort comPort, ISystems<?, ?> system, java.util.UUID... identityToken);
 }
