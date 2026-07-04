@@ -16,13 +16,19 @@ public interface ICerialMasterService<J extends ICerialMasterService<J>> {
 
     Uni<ComPortConnection<?>> addOrUpdateConnection(Mutiny.Session session, ComPortConnection<?> comPort, ISystems<?, ?> system, java.util.UUID... identityToken);
 
+    Uni<ComPortConnection<?>> addOrUpdateConnection(Mutiny.StatelessSession session, ComPortConnection<?> comPort, ISystems<?, ?> system, java.util.UUID... identityToken);
+
     Uni<ComPortConnection<?>> updateStatus(Mutiny.Session session, ComPortConnection<?> comPort, ISystems<?, ?> system, java.util.UUID... identityToken);
+
+    Uni<ComPortConnection<?>> updateStatus(Mutiny.StatelessSession session, ComPortConnection<?> comPort, ISystems<?, ?> system, java.util.UUID... identityToken);
 
     Uni<ComPortConnection<?>> findComPortConnection(Mutiny.Session session, ComPortConnection<?> comPort, ISystems<?, ?> system, java.util.UUID... identityToken);
 
-//	ComPortConnection<?> registerNewConnection(ComPortConnection<?> comPortConnection);
+    Uni<ComPortConnection<?>> findComPortConnection(Mutiny.StatelessSession session, ComPortConnection<?> comPort, ISystems<?, ?> system, java.util.UUID... identityToken);
 
     Uni<ComPortConnection<?>> getComPortConnection(Mutiny.Session session, Integer comPort, IEnterprise<?, ?> enterprise);
+
+    Uni<ComPortConnection<?>> getComPortConnection(Mutiny.StatelessSession session, Integer comPort, IEnterprise<?, ?> enterprise);
 
     Uni<ComPortConnection<?>> getComPortConnectionDirect(Integer comPort);
 
@@ -32,15 +38,25 @@ public interface ICerialMasterService<J extends ICerialMasterService<J>> {
      */
     Uni<ComPortConnection<?>> getComPortConnection(Mutiny.Session session, Integer comPort, IEnterprise<?, ?> enterprise, com.guicedee.activitymaster.cerialmaster.client.Config timedConfig);
 
+    Uni<ComPortConnection<?>> getComPortConnection(Mutiny.StatelessSession session, Integer comPort, IEnterprise<?, ?> enterprise, com.guicedee.activitymaster.cerialmaster.client.Config timedConfig);
+
     Uni<ComPortConnection<?>> getScannerPortConnection(Mutiny.Session session, Integer comPort, IEnterprise<?, ?> enterprise);
 
+    Uni<ComPortConnection<?>> getScannerPortConnection(Mutiny.StatelessSession session, Integer comPort, IEnterprise<?, ?> enterprise);
+
     Uni<ComPortConnection<?>> getScannerPortConnection(Mutiny.Session session, Integer comPort, IEnterprise<?, ?> enterprise, com.guicedee.activitymaster.cerialmaster.client.Config timedConfig);
+
+    Uni<ComPortConnection<?>> getScannerPortConnection(Mutiny.StatelessSession session, Integer comPort, IEnterprise<?, ?> enterprise, com.guicedee.activitymaster.cerialmaster.client.Config timedConfig);
 
     Uni<List<String>> listComPorts();
 
     Uni<List<String>> listRegisteredComPorts(Mutiny.Session session, IEnterprise<?, ?> enterprise);
 
+    Uni<List<String>> listRegisteredComPorts(Mutiny.StatelessSession session, IEnterprise<?, ?> enterprise);
+
     Uni<List<String>> listAvailableComPorts(Mutiny.Session session, IEnterprise<?, ?> enterprise);
+
+    Uni<List<String>> listAvailableComPorts(Mutiny.StatelessSession session, IEnterprise<?, ?> enterprise);
 
     /**
      * Resolves a single registered COM port by its number and hydrates a fully-populated
@@ -58,6 +74,8 @@ public interface ICerialMasterService<J extends ICerialMasterService<J>> {
      */
     Uni<CerialComPort> findComPortDetailed(Mutiny.Session session, Integer comPort, ISystems<?, ?> system, java.util.UUID... identityToken);
 
+    Uni<CerialComPort> findComPortDetailed(Mutiny.StatelessSession session, Integer comPort, ISystems<?, ?> system, java.util.UUID... identityToken);
+
     /**
      * Lists every registered COM port as a fully-hydrated {@link CerialComPort} DTO read straight from
      * the ActivityMaster warehouse.
@@ -68,6 +86,8 @@ public interface ICerialMasterService<J extends ICerialMasterService<J>> {
      * @return a {@link Uni} emitting the list of hydrated COM ports
      */
     Uni<List<CerialComPort>> listComPortsDetailed(Mutiny.Session session, ISystems<?, ?> system, java.util.UUID... identityToken);
+
+    Uni<List<CerialComPort>> listComPortsDetailed(Mutiny.StatelessSession session, ISystems<?, ?> system, java.util.UUID... identityToken);
 
     /**
      * Creates or updates a COM port from a strongly-typed {@link CerialComPort} DTO and returns the
@@ -87,4 +107,6 @@ public interface ICerialMasterService<J extends ICerialMasterService<J>> {
      * @return a {@link Uni} emitting the hydrated, persisted {@link CerialComPort}
      */
     Uni<CerialComPort> addOrUpdateComPortDetailed(Mutiny.Session session, CerialComPort comPort, ISystems<?, ?> system, java.util.UUID... identityToken);
+
+    Uni<CerialComPort> addOrUpdateComPortDetailed(Mutiny.StatelessSession session, CerialComPort comPort, ISystems<?, ?> system, java.util.UUID... identityToken);
 }
