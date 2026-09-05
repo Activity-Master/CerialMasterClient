@@ -2271,7 +2271,7 @@ public class MultiTimedComPortSender {
             publisher.publish(payload);
             log.debug("✅ Published payload to '{}'", address);
         } catch (ConfigurationException t) {
-            log.warn("🔥 Statistics publisher not registered - {}", address);
+            log.trace("🔥 Statistics publisher not registered - {}", address);
         } catch (Throwable t) {
             log.warn("🔥 Failed to publish to '{}': {}", address, t.getMessage(), t);
         }
